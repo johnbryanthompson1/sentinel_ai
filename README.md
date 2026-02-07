@@ -28,10 +28,10 @@ Sentinel AI uses **signal processing-based voice activity detection (VAD)** rath
 Initial development used `pyannote.audio` (via Hugging Face) for speaker counting with DBSCAN clustering. However, speaker embeddings failed to separate reliably on Raspberry Pi hardware—voice embedding distances clustered too tightly (0.22–0.24 cosine distance) to distinguish individual speakers.
 
 **The pivot:** Switching to RMS-based voice activity detection provided:
-- ✅ Reliable performance on constrained hardware
-- ✅ Faster processing (no model loading overhead)
-- ✅ Privacy preservation (no voice embeddings stored)
-- ✅ More actionable metric (total engagement vs. speaker count)
+      Reliable performance on constrained hardware
+      Faster processing (no model loading overhead)
+      Privacy preservation (no voice embeddings stored)
+      More actionable metric (total engagement vs. speaker count)
 
 This demonstrates **engineering judgment**: selecting the right tool for the problem constraints rather than defaulting to complex ML.
 
@@ -94,16 +94,10 @@ python3 sentinel_voice.py
 ## Real-World Validation
 
 Tested in live high school English classroom (Concordia International School Shanghai):
-- ✅ High engagement detected during class discussions
-- ✅ Silent/low engagement detected during independent work
-- ✅ Reliable performance across 40-minute class periods
+      High engagement detected during class discussions
+      Silent/low engagement detected during independent work
+      Reliable performance across 40-minute class periods
 
-## Future Enhancements
-
-- [ ] Multi-day engagement trend visualization
-- [ ] Integration with learning management systems (LMS)
-- [ ] Adaptive threshold calibration
-- [ ] Real-time dashboard for educators
 
 ## Author
 

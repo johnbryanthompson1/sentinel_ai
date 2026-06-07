@@ -1,207 +1,189 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[codz]
-*$py.class
+"""
+sentinel_voice.py
+Sentinel AI — Classroom Engagement Monitor
 
-# C extensions
-*.so
+Uses RMS energy-based voice activity detection to measure real-time
+student engagement. Designed for Raspberry Pi 5 + ReSpeaker Mic Array v3.0.
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+Author: John Thompson
+"""
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+import subprocess
+import wave
+import numpy as np
+import csv
+import datetime
+import os
+import time
+import signal
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# ─────────────────────────────────────────────
+# CONFIGURATION
+# ─────────────────────────────────────────────
+AUDIO_CARD = "0"                  # Change to match your arecord card number
+RECORDING_DURATION = 60           # Seconds per monitoring cycle
+FRAME_SIZE = 0.5                  # Seconds per analysis frame
+AUDIO_FILE = "/tmp/sentinel_temp.wav"
+LOG_FILE = "engagement_log.csv"
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py.cover
-.hypothesis/
-.pytest_cache/
-cover/
+# Baseline silence threshold — calibrate by recording 60s of silence
+# and setting this ~20-30 points above the max RMS you observe
+BASELINE_THRESHOLD = 500          # Adjust after calibration
 
-# Translations
-*.mo
-*.pot
+# Engagement level thresholds (voice activity %)
+THRESHOLDS = {
+    "HIGH":   (40, 100),
+    "MEDIUM": (15, 39),
+    "LOW":    (5,  14),
+    "SILENT": (0,   4),
+}
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
+running = True
 
-# Flask stuff:
-instance/
-.webassets-cache
+# ─────────────────────────────────────────────
+# GRACEFUL SHUTDOWN
+# ─────────────────────────────────────────────
+def handle_exit(sig, frame):
+    global running
+    print("\n\n[Sentinel AI] Stopping monitor... final log saved.")
+    running = False
 
-# Scrapy stuff:
-.scrapy
+signal.signal(signal.SIGINT, handle_exit)
 
-# Sphinx documentation
-docs/_build/
+# ─────────────────────────────────────────────
+# INITIALIZE CSV LOG
+# ─────────────────────────────────────────────
+def init_log():
+    if not os.path.exists(LOG_FILE):
+        with open(LOG_FILE, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "timestamp",
+                "voice_activity_pct",
+                "engagement_level",
+                "active_frames",
+                "total_frames"
+            ])
 
-# PyBuilder
-.pybuilder/
-target/
+# ─────────────────────────────────────────────
+# RECORD AUDIO
+# ─────────────────────────────────────────────
+def record_audio():
+    cmd = [
+        "arecord",
+        "-D", f"plughw:{AUDIO_CARD},0",
+        "-f", "S16_LE",
+        "-r", "16000",
+        "-c", "1",
+        "-d", str(RECORDING_DURATION),
+        AUDIO_FILE
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"    Recording error: {e}")
+        return False
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# ─────────────────────────────────────────────
+# ANALYZE AUDIO — RMS VOICE ACTIVITY DETECTION
+# ─────────────────────────────────────────────
+def analyze_audio(filepath):
+    try:
+        with wave.open(filepath, 'rb') as wf:
+            sample_rate = wf.getframerate()
+            n_channels = wf.getnchannels()
+            raw = wf.readframes(wf.getnframes())
 
-# IPython
-profile_default/
-ipython_config.py
+        # Convert raw bytes to numpy array
+        samples = np.frombuffer(raw, dtype=np.int16)
 
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
+        # If stereo, take first channel only
+        if n_channels > 1:
+            samples = samples[::n_channels]
 
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
+        # Split into frames
+        frame_length = int(sample_rate * FRAME_SIZE)
+        n_full_frames = len(samples) // frame_length
 
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
+        # RMS energy per frame
+        rms_values = np.array([
+            np.sqrt(np.mean(samples[i * frame_length:(i + 1) * frame_length].astype(np.float64) ** 2))
+            for i in range(n_full_frames)
+        ])
 
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-#poetry.toml
+        print(f"    Frames: {n_full_frames} ({FRAME_SIZE}s each)")
+        print(f"    RMS range: {rms_values.min():.1f} – {rms_values.max():.1f} | Mean: {rms_values.mean():.1f}")
 
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
-#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
-#pdm.lock
-#pdm.toml
-.pdm-python
-.pdm-build/
+        # Dynamic threshold: mean + 1 std dev (adaptive per cycle)
+        dynamic_threshold = max(BASELINE_THRESHOLD, rms_values.mean() + rms_values.std())
+        print(f"    Activity threshold: {dynamic_threshold:.1f}")
 
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-#pixi.lock
-#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
-#   in the .venv directory. It is recommended not to include this directory in version control.
-.pixi
+        # Count active frames
+        active_frames = int(np.sum(rms_values > dynamic_threshold))
+        total_frames = n_full_frames
+        voice_activity_pct = round((active_frames / total_frames) * 100, 1)
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
+        print(f"    Active frames: {active_frames}/{total_frames} → {voice_activity_pct}% voice activity")
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
+        # Map to engagement level
+        engagement = "SILENT"
+        for level, (low, high) in THRESHOLDS.items():
+            if low <= voice_activity_pct <= high:
+                engagement = level
+                break
 
-# SageMath parsed files
-*.sage.py
+        return voice_activity_pct, engagement, active_frames, total_frames
 
-# Environments
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+    except Exception as e:
+        print(f"    Analysis error: {e}")
+        return 0.0, "ERROR", 0, 0
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# ─────────────────────────────────────────────
+# LOG RESULT
+# ─────────────────────────────────────────────
+def log_result(timestamp, voice_pct, engagement, active_frames, total_frames):
+    with open(LOG_FILE, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([timestamp, voice_pct, engagement, active_frames, total_frames])
 
-# Rope project settings
-.ropeproject
+# ─────────────────────────────────────────────
+# MAIN LOOP
+# ─────────────────────────────────────────────
+def main():
+    global running
 
-# mkdocs documentation
-/site
+    print("=" * 50)
+    print("  SENTINEL AI — Classroom Engagement Monitor")
+    print("=" * 50)
+    print(f"  Recording: {RECORDING_DURATION}s cycles | Card: {AUDIO_CARD}")
+    print(f"  Frame size: {FRAME_SIZE}s | Log: {LOG_FILE}")
+    print("  Press Ctrl+C to stop monitoring")
+    print("=" * 50 + "\n")
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+    init_log()
 
-# Pyre type checker
-.pyre/
+    while running:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{timestamp}] Recording for {RECORDING_DURATION} seconds...")
 
-# pytype static type analyzer
-.pytype/
+        if not record_audio():
+            print("  Skipping this cycle due to recording error.\n")
+            time.sleep(2)
+            continue
 
-# Cython debug symbols
-cython_debug/
+        print("  Analyzing...")
+        voice_pct, engagement, active, total = analyze_audio(AUDIO_FILE)
 
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+        if engagement == "ERROR":
+            print("  Skipping this cycle due to analysis error.\n")
+            continue
 
-# Abstra
-# Abstra is an AI-powered process automation framework.
-# Ignore directories containing user credentials, local state, and settings.
-# Learn more at https://abstra.io/docs
-.abstra/
+        log_result(timestamp, voice_pct, engagement, active, total)
+        print(f"  ✓ Voice Activity: {voice_pct}% | Engagement: {engagement}\n")
 
-# Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#  you could uncomment the following to ignore the entire vscode folder
-# .vscode/
+        if os.path.exists(AUDIO_FILE):
+            os.remove(AUDIO_FILE)
 
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
-
-# Cursor
-#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
-.cursorignore
-.cursorindexingignore
-
-# Marimo
-marimo/_static/
-marimo/_lsp/
-__marimo__/
+if __name__ == "__main__":
+    main()
